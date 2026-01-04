@@ -4,12 +4,17 @@ import org.junit.jupiter.api.*;
 import org.openqa.selenium.*;
 import org.openqa.selenium.chrome.ChromeDriver;
 import org.openqa.selenium.chrome.ChromeOptions;
+import org.openqa.selenium.support.ui.ExpectedConditions;
+import org.openqa.selenium.support.ui.WebDriverWait;
 import io.github.bonigarcia.wdm.WebDriverManager;
+
+import java.time.Duration;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 class CardOrderTest {
     private WebDriver driver;
+    private WebDriverWait wait;
     private final String baseUrl = "http://localhost:9999";
 
     @BeforeAll
@@ -23,8 +28,17 @@ class CardOrderTest {
         options.addArguments("--disable-dev-shm-usage");
         options.addArguments("--no-sandbox");
         options.addArguments("--headless");
+        options.addArguments("--window-size=1920,1080");
+
         driver = new ChromeDriver(options);
+        wait = new WebDriverWait(driver, Duration.ofSeconds(10));
+        driver.manage().timeouts().implicitlyWait(Duration.ofSeconds(5));
+
         driver.get(baseUrl);
+
+        // Ждем загрузки формы (ждем хотя бы одно поле)
+        wait.until(ExpectedConditions.presenceOfElementLocated(
+                By.cssSelector("[data-test-id=name] input")));
     }
 
     @AfterEach
@@ -34,89 +48,126 @@ class CardOrderTest {
         }
     }
 
-    private void fillForm(String city, String date, String name, String phone, boolean agree) {
-        driver.findElement(By.cssSelector("[data-test-id=city] input")).sendKeys(city);
+    private void fillForm(String name, String phone, boolean agree) {
+        WebElement nameInput = driver.findElement(By.cssSelector("[data-test-id=name] input"));
+        nameInput.clear();
+        if (name != null && !name.isEmpty()) {
+            nameInput.sendKeys(name);
+        }
 
-        WebElement dateInput = driver.findElement(By.cssSelector("[data-test-id=date] input"));
-        dateInput.clear();
-        dateInput.sendKeys(date);
+        WebElement phoneInput = driver.findElement(By.cssSelector("[data-test-id=phone] input"));
+        phoneInput.clear();
+        if (phone != null && !phone.isEmpty()) {
+            phoneInput.sendKeys(phone);
+        }
 
-        driver.findElement(By.cssSelector("[data-test-id=name] input")).sendKeys(name);
-        driver.findElement(By.cssSelector("[data-test-id=phone] input")).sendKeys(phone);
+        WebElement agreement = driver.findElement(By.cssSelector("[data-test-id=agreement]"));
+        boolean isChecked = agreement.isSelected();
 
-        if (agree) {
-            driver.findElement(By.cssSelector("[data-test-id=agreement]")).click();
+        if (agree && !isChecked) {
+            agreement.click();
+        } else if (!agree && isChecked) {
+            agreement.click();
         }
 
         driver.findElement(By.cssSelector("button")).click();
     }
 
     private String getSuccessMessage() {
-        return driver.findElement(By.cssSelector("[data-test-id=order-success]"))
+        // Ждем появления сообщения об успехе
+        return wait.until(ExpectedConditions.presenceOfElementLocated(
+                        By.cssSelector("[data-test-id=order-success]")))
                 .getText().trim();
     }
 
     private String getErrorForField(String fieldId) {
-        return driver.findElement(By.cssSelector(String.format("[data-test-id=%s].input_invalid .input__sub", fieldId)))
+        // Ждем пока поле станет невалидным
+        wait.until(ExpectedConditions.attributeContains(
+                By.cssSelector(String.format("[data-test-id=%s]", fieldId)),
+                "class", "input_invalid"));
+
+        return driver.findElement(By.cssSelector(
+                        String.format("[data-test-id=%s].input_invalid .input__sub", fieldId)))
                 .getText().trim();
     }
 
     @Test
     @DisplayName("Успешная отправка формы с валидными данными")
     void shouldSubmitFormWithValidData() {
-        fillForm("Москва", DataGenerator.generateDate(3),
-                "Иванов-Петров Иван", "+79270000000", true);
+        fillForm("Иванов Иван", "+79270000000", true);
 
         String actualText = getSuccessMessage();
-        assertEquals("Ваша заявка успешно отправлена! Наш менеджер свяжется с вами в ближайшее время.",
-                actualText);
+        String expectedText = "Ваша заявка успешно отправлена! Наш менеджер свяжется с вами в ближайшее время.";
+
+        assertEquals(expectedText, actualText);
     }
 
     @Test
     @DisplayName("Ошибка при вводе имени латинскими буквами")
     void shouldShowErrorForInvalidName() {
-        fillForm("Санкт-Петербург", DataGenerator.generateDate(5),
-                "John Smith", "+79270000000", true);
+        fillForm("John Smith", "+79270000000", true);
 
         String errorText = getErrorForField("name");
-        assertEquals("Имя и Фамилия указаные неверно. Допустимы только русские буквы, пробелы и дефисы.",
-                errorText);
+        String expectedError = "Имя и Фамилия указаные неверно. Допустимы только русские буквы, пробелы и дефисы.";
+
+        assertEquals(expectedError, errorText);
     }
 
     @Test
     @DisplayName("Ошибка при вводе некорректного телефона")
     void shouldShowErrorForInvalidPhone() {
-        fillForm("Казань", DataGenerator.generateDate(7),
-                "Сидоров Петр", DataGenerator.generateInvalidPhone(), true);
+        fillForm("Иванов Иван", "+7927000000", true);
 
         String errorText = getErrorForField("phone");
-        assertEquals("Телефон указан неверно. Должно быть 11 цифр, например, +79012345678.",
-                errorText);
+        String expectedError = "Телефон указан неверно. Должно быть 11 цифр, например, +79012345678.";
+
+        assertEquals(expectedError, errorText);
     }
 
     @Test
     @DisplayName("Ошибка при незаполненном чекбоксе согласия")
     void shouldShowErrorWithoutAgreement() {
-        fillForm("Новосибирск", DataGenerator.generateDate(10),
-                "Кузнецова Мария", "+79270000000", false);
+        fillForm("Иванов Иван", "+79270000000", false);
 
-        WebElement agreementCheckbox = driver.findElement(By.cssSelector("[data-test-id=agreement]"));
-        assertTrue(agreementCheckbox.getAttribute("class").contains("input_invalid"));
+        // Ждем пока чекбокс станет невалидным
+        wait.until(ExpectedConditions.attributeContains(
+                By.cssSelector("[data-test-id=agreement]"),
+                "class", "input_invalid"));
+
+        WebElement agreementCheckbox = driver.findElement(
+                By.cssSelector("[data-test-id=agreement].input_invalid"));
+        assertTrue(agreementCheckbox.isDisplayed(),
+                "Чекбокс должен быть помечен как невалидный при отсутствии согласия");
     }
 
     @Test
-    @DisplayName("Ошибка при пустом поле города")
-    void shouldShowErrorForEmptyCity() {
-        WebElement dateInput = driver.findElement(By.cssSelector("[data-test-id=date] input"));
-        dateInput.clear();
-        dateInput.sendKeys(DataGenerator.generateDate(3));
+    @DisplayName("Ошибка при пустом поле имени")
+    void shouldShowErrorForEmptyName() {
+        // Используем fillForm для пустого имени
+        fillForm("", "+79270000000", true);
 
-        driver.findElement(By.cssSelector("[data-test-id=name] input")).sendKeys("Федоров Алексей");
-        driver.findElement(By.cssSelector("[data-test-id=phone] input")).sendKeys("+79270000000");
-        driver.findElement(By.cssSelector("[data-test-id=agreement]")).click();
-        driver.findElement(By.cssSelector("button")).click();
-
-        String errorText = getErrorForField("city");
+        String errorText = getErrorForField("name");
         assertEquals("Поле обязательно для заполнения", errorText);
+    }
+
+    @Test
+    @DisplayName("Ошибка при пустом поле телефона")
+    void shouldShowErrorForEmptyPhone() {
+        // Используем fillForm для пустого телефона
+        fillForm("Иванов Иван", "", true);
+
+        String errorText = getErrorForField("phone");
+        assertEquals("Поле обязательно для заполнения", errorText);
+    }
+
+    @Test
+    @DisplayName("Валидное имя с дефисом принимается")
+    void shouldAcceptNameWithHyphen() {
+        fillForm("Салтыков-Щедрин Михаил", "+79270000000", true);
+
+        String actualText = getSuccessMessage();
+        String expectedText = "Ваша заявка успешно отправлена! Наш менеджер свяжется с вами в ближайшее время.";
+
+        assertEquals(expectedText, actualText);
     }
 }
